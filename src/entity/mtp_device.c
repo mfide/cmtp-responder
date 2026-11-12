@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+#include <stdlib.h>
 #include <unistd.h>
 #include <glib.h>
 #include "mtp_support.h"
@@ -119,6 +120,14 @@ static mtp_err_t __clear_store_data(mtp_uint32 store_id)
 	return MTP_ERROR_GENERAL;
 }
 
+/* the platform names the device at run time (MTP_MANUFACTURER, MTP_MODEL, MTP_VERSION, MTP_SERIAL) */
+static const char *__env_or(const char *name, const char *fallback)
+{
+	const char *v = getenv(name);
+
+	return v && v[0] ? v : fallback;
+}
+
 void _init_mtp_device(void)
 {
 	device_info_t *info = &(g_device->device_info);
@@ -146,19 +155,19 @@ void _init_mtp_device(void)
 	_prop_copy_char_to_ptpstring(&(info->vendor_extn_desc), wtemp, WCHAR_TYPE);
 
 	info->manufacturer.num_chars = 0;
-	_util_utf8_to_utf16(wtemp, sizeof(wtemp) / WCHAR_SIZ, MTP_MANUFACTURER_CHAR);
+	_util_utf8_to_utf16(wtemp, sizeof(wtemp) / WCHAR_SIZ, __env_or("MTP_MANUFACTURER", MTP_MANUFACTURER_CHAR));
 	_prop_copy_char_to_ptpstring(&(info->manufacturer), wtemp, WCHAR_TYPE);
 
 	info->model.num_chars = 0;
-	_util_utf8_to_utf16(wtemp, sizeof(wtemp) / WCHAR_SIZ, MODEL);
+	_util_utf8_to_utf16(wtemp, sizeof(wtemp) / WCHAR_SIZ, __env_or("MTP_MODEL", MODEL));
 	_prop_copy_char_to_ptpstring(&(info->model), wtemp, WCHAR_TYPE);
 
 	info->device_version.num_chars = 0;
-	_util_utf8_to_utf16(wtemp, sizeof(wtemp) / WCHAR_SIZ, DEVICE_VERSION);
+	_util_utf8_to_utf16(wtemp, sizeof(wtemp) / WCHAR_SIZ, __env_or("MTP_VERSION", DEVICE_VERSION));
 	_prop_copy_char_to_ptpstring(&(info->device_version), wtemp, WCHAR_TYPE);
 
 	info->serial_no.num_chars = 0;
-	_util_utf8_to_utf16(wtemp, sizeof(wtemp) / WCHAR_SIZ, SERIAL);
+	_util_utf8_to_utf16(wtemp, sizeof(wtemp) / WCHAR_SIZ, __env_or("MTP_SERIAL", SERIAL));
 	_prop_copy_char_to_ptpstring(&(info->serial_no), wtemp, WCHAR_TYPE);
 }
 
