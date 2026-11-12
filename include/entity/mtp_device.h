@@ -131,6 +131,13 @@ mtp_bool _device_install_storage(void);
 mtp_bool _device_uninstall_storage(void);
 
 /*
+ * void _device_refresh_storage(void)
+ * The card was inserted, removed or mounted again: drops the store and
+ * offers the card again, telling the host with StoreRemoved/StoreAdded.
+ */
+void _device_refresh_storage(void);
+
+/*
  * mtp_store_t *_device_get_store(mtp_uint32 store_id)
  * This function will get the store with store_id.
  * @param[in]	store_id	ID of the store

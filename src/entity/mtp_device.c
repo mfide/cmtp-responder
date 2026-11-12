@@ -17,6 +17,9 @@
 
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <sys/statvfs.h>
+#include <sys/syscall.h>
 #include <glib.h>
 #include "mtp_support.h"
 #include "mtp_util.h"
@@ -24,12 +27,16 @@
 #include "mtp_device.h"
 #include "mtp_transport.h"
 #include "ptp_container.h"
+#include "mtp_thread.h"
+#include "mtp_event_handler.h"
+#include "mtp_inoti_handler.h"
 
 #define MTP_DEVICE_VERSION_CHAR		"V1.0"
 
 /*
  * GLOBAL AND EXTERN VARIABLES
  */
+extern pthread_mutex_t g_cmd_inoti_mutex;
 static mtp_device_t _g_device = { 0 };
 mtp_device_t *g_device = &_g_device;
 
@@ -68,6 +75,8 @@ static mtp_uint16 g_ops_supported[] = {
 static mtp_uint16 g_event_supported[] = {
 	PTP_EVENTCODE_OBJECTADDED,
 	PTP_EVENTCODE_OBJECTREMOVED,
+	PTP_EVENTCODE_STOREADDED,
+	PTP_EVENTCODE_STOREREMOVED,
 };
 
 static mtp_uint16 g_capture_fmts[] = {
@@ -337,6 +346,27 @@ void _reset_mtp_device(void)
 }
 /* LCOV_EXCL_STOP */
 
+static mtp_bool __is_mountpoint(const mtp_char *path)
+{
+	struct stat st;
+	struct stat parent;
+	mtp_char *dir = g_path_get_dirname(path);
+	mtp_bool ret = FALSE;
+
+	if (stat(path, &st) == 0 && stat(dir, &parent) == 0)
+		ret = st.st_dev != parent.st_dev;
+	g_free(dir);
+
+	return ret;
+}
+
+static mtp_bool __is_readonly(const mtp_char *path)
+{
+	struct statvfs st;
+
+	return statvfs(path, &st) == 0 && (st.f_flag & ST_RDONLY);
+}
+
 /*
  * static mtp_bool _device_add_store(void)
  * This function will add the store to the device.
@@ -361,12 +391,20 @@ static mtp_bool __add_store_to_device(void)
 		"attribute [0x%x], dir[0x%x]\nStorage [%d]\n",
 		attrs.attribute, MTP_FILE_ATTR_MODE_DIR, store_id);
 
+	/* the share is the card: without a card mounted there the PC gets no storage */
+	retvm_if(!__is_mountpoint(storage_path), FALSE,
+		"no card at [%s]\n", storage_path);
+
 	retvm_if(g_device->num_stores + 1 > MAX_NUM_DEVICE_STORES, FALSE,
 		"reached to max [%d]\n", MAX_NUM_DEVICE_STORES);
 
 	retvm_if(!_entity_init_mtp_store(&(g_device->store_list[g_device->num_stores]),
 		store_id, storage_path), FALSE,
 		"_entity_init_mtp_store() Fail\n");
+
+	if (__is_readonly(storage_path))
+		g_device->store_list[g_device->num_stores].store_info.access =
+			PTP_STORAGEACCESS_R;
 
 	g_device->num_stores++;
 	g_device->is_mounted[0] = TRUE;
@@ -414,6 +452,33 @@ mtp_bool _device_uninstall_storage(void)
 }
 
 /* LCOV_EXCL_STOP */
+
+void _device_refresh_storage(void)
+{
+	mtp_char *root = NULL;
+
+	retm_if(g_status->mtp_op_state < MTP_STATE_READY_SERVICE,
+		"not serving yet\n");
+
+	UTIL_LOCK_MUTEX(&g_cmd_inoti_mutex);
+
+	if (g_device->is_mounted[0] == TRUE) {
+		root = g_strdup(g_device->store_list[0].root_path);
+		__remove_store_from_device();
+#ifdef MTP_SUPPORT_OBJECTADDDELETE_EVENT
+		_inoti_remove_watches(root);
+#endif /*MTP_SUPPORT_OBJECTADDDELETE_EVENT*/
+		g_free(root);
+		_eh_send_event_req_to_eh_thread(EVENT_STORE_REMOVED,
+				MTP_EXTERNAL_STORE_ID, 0, NULL);
+	}
+
+	if (__add_store_to_device())
+		_eh_send_event_req_to_eh_thread(EVENT_STORE_ADDED,
+				MTP_EXTERNAL_STORE_ID, 0, NULL);
+
+	UTIL_UNLOCK_MUTEX(&g_cmd_inoti_mutex);
+}
 
 mtp_store_t *_device_get_store(mtp_uint32 store_id)
 {

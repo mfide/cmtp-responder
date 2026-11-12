@@ -20,6 +20,7 @@
 #include <sys/syscall.h>
 #include <glib.h>
 #include <glib-object.h>
+#include <glib-unix.h>
 #include <malloc.h>
 #include "mtp_init.h"
 #include "mtp_config.h"
@@ -323,8 +324,6 @@ void __init_mtp_info(void)
 
 void _mtp_init(void)
 {
-	mtp_int32 error = 0;
-
 	DBG("Initialization start!\n");
 
 	__read_mtp_conf();
@@ -351,20 +350,7 @@ void _mtp_init(void)
 		}
 	}
 
-	/* External Storage */
-	{
-	/* LCOV_EXCL_START */
-		char ext_path[MTP_MAX_PATHNAME_SIZE + 1] = { 0 };
-		_util_get_external_path(ext_path);
-		if (access(ext_path, F_OK) < 0) {
-			if (FALSE == _util_dir_create((const mtp_char *)ext_path, &error)) {
-				ERR("Cannot make directory!! [%s]\n",
-						ext_path);
-				goto MTP_INIT_FAIL;
-			}
-		}
-	/* LCOV_EXCL_STOP */
-	}
+	/* the card share is made by whoever mounts the card, not here */
 
 	/* Set mtpdeviceinfo */
 	_init_mtp_device();
@@ -412,6 +398,13 @@ void mtp_end_event(void)
 }
 /* LCOV_EXCL_STOP */
 
+/* SIGUSR1: the card changed, offer it to the host again */
+static gboolean __card_changed(gpointer data)
+{
+	_device_refresh_storage();
+	return G_SOURCE_CONTINUE;
+}
+
 static inline int _main_init()
 {
 	pthread_mutexattr_t mutex_attr;
@@ -431,6 +424,8 @@ static inline int _main_init()
 
 	g_mainloop = g_main_loop_new(NULL, FALSE);
 	retvm_if(!g_mainloop, MTP_ERROR_GENERAL, "g_mainloop is NULL\n");
+
+	g_unix_signal_add(SIGUSR1, __card_changed, NULL);
 
 	return MTP_ERROR_NONE;
 }

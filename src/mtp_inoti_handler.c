@@ -324,6 +324,27 @@ static void __process_object_deleted_event(mtp_char *fullpath,
 			0, NULL);
 }
 
+/* the kernel dropped the watch (folder deleted or file system unmounted) */
+static void __forget_inoti_watch(mtp_int32 wd)
+{
+	mtp_int32 i = __get_inoti_watch_id(wd);
+	open_files_info_t *node = g_open_files_list;
+	open_files_info_t *prev = NULL;
+
+	if (i >= 0) {
+		g_free(g_inoti_watches[i].forlder_name);
+		g_inoti_watches[i].forlder_name = NULL;
+		g_inoti_watches[i].wd = 0;
+	}
+
+	while (node != NULL) {
+		prev = node->previous;
+		if (node->wd == wd)
+			__remove_file_from_inoti_open_files_list(node);
+		node = prev;
+	}
+}
+
 static mtp_bool __process_inoti_event(struct inotify_event *event)
 {
 	static mtp_int32 last_moved_cookie = -1;
@@ -331,6 +352,11 @@ static mtp_bool __process_inoti_event(struct inotify_event *event)
 	mtp_bool res = FALSE;
 	mtp_char full_path[MTP_MAX_PATHNAME_SIZE + 1] = { 0 };
 	mtp_char parentpath[MTP_MAX_PATHNAME_SIZE + 1] = { 0 };
+
+	if (event->mask & IN_IGNORED) {
+		__forget_inoti_watch(event->wd);
+		return TRUE;
+	}
 
 	if (event->len == 0 || event->len > MTP_MAX_FILENAME_SIZE) {
 		ERR_SECURE("Event len is invalid[%d], event->name[%s]\n", event->len,
@@ -544,7 +570,11 @@ void *_thread_inoti(void *arg)
 
 		while (i < length) {
 			event = (struct inotify_event *)(&buffer[i]);
+			pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+			UTIL_LOCK_MUTEX(&g_cmd_inoti_mutex);
 			__process_inoti_event(event);
+			UTIL_UNLOCK_MUTEX(&g_cmd_inoti_mutex);
+			pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
 			temp_idx = i + event->len + INOTI_EVENT_SIZE;
 			if (temp_idx > length)
 				break;
@@ -558,6 +588,11 @@ void *_thread_inoti(void *arg)
 
 	return NULL;
 	/* LCOV_EXCL_STOP */
+}
+
+void _inoti_remove_watches(mtp_char *path)
+{
+	__remove_recursive_inoti_watch(path);
 }
 
 void _inoti_add_watch_for_fs_events(mtp_char *path)

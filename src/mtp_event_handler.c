@@ -60,6 +60,12 @@ static mtp_bool __send_events_from_device_to_pc(mtp_dword store_id,
 				0, param1 , 0);
 		break;
 
+	case PTP_EVENTCODE_STOREADDED:
+	case PTP_EVENTCODE_STOREREMOVED:
+		DBG("store event [0x%x] store [0x%x]\n", ptp_event, store_id);
+		_hdlr_init_event_container(&event, ptp_event, 0, store_id, 0);
+		break;
+
 	default:
 		DBG("Event not supported\n");
 		return FALSE;
@@ -107,6 +113,16 @@ static mtp_bool __process_event_request(mtp_event_t *evt)
 	case EVENT_OBJECT_REMOVED:
 		__send_events_from_device_to_pc(0,
 				PTP_EVENTCODE_OBJECTREMOVED, evt->param1, 0);
+		break;
+
+	case EVENT_STORE_ADDED:
+		__send_events_from_device_to_pc(evt->param1,
+				PTP_EVENTCODE_STOREADDED, 0, 0);
+		break;
+
+	case EVENT_STORE_REMOVED:
+		__send_events_from_device_to_pc(evt->param1,
+				PTP_EVENTCODE_STOREREMOVED, 0, 0);
 		break;
 
 	case EVENT_CLOSE:
@@ -164,7 +180,7 @@ static mtp_bool __send_start_event_to_eh_thread(void)
 	DBG("Action : START MTP OPERATION\n");
 
 	status = write(g_pipefd[1], &event, sizeof(mtp_event_t));
-	retvm_if(status == -1 || errno == EINTR, FALSE,
+	retvm_if(status != sizeof(mtp_event_t), FALSE,
 		"Event write over pipe Fail, status= [%d],pipefd = [%d], errno [%d]\n",
 		status, g_pipefd[1], errno);
 
@@ -185,7 +201,7 @@ void _eh_send_event_req_to_eh_thread(event_code_t action, mtp_ulong param1,
 	DBG("action[%d], param1[%ld], param2[%ld]\n", action, param1, param2);
 
 	status = write(g_pipefd[1], &event, sizeof(mtp_event_t));
-	if (status == -1 || errno == EINTR) {
+	if (status != sizeof(mtp_event_t)) {
 		ERR("Event write over pipe Fail, status = [%d], pipefd = [%d], errno [%d]\n",
 				status, g_pipefd[1], errno);
 	}
