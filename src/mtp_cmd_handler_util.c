@@ -356,6 +356,13 @@ mtp_err_t _hutil_remove_object_entry(mtp_uint32 obj_handle, mtp_uint32 format)
 	}
 #endif /*MTP_SUPPORT_SET_PROTECTION*/
 
+	if (obj_handle != 0xFFFFFFFF) {
+		mtp_obj_t *busy_obj = _device_get_object_with_handle(obj_handle);
+
+		retvm_if(busy_obj && busy_obj->file_path && _util_path_in_use(busy_obj->file_path),
+			MTP_ERROR_OBJECT_WRITE_PROTECTED, "in use on the device [%s]\n", busy_obj->file_path);
+	}
+
 	ret = _device_delete_object(obj_handle, format);
 	switch (ret) {
 	case PTP_RESPONSE_OK:
@@ -1308,6 +1315,9 @@ mtp_err_t _hutil_update_object_property(mtp_uint32 obj_handle,
 			retvm_if(!_entity_check_child_obj_path(obj, orig_fpath,
 				dest_fpath), MTP_ERROR_GENERAL,
 				"_entity_check_child_obj_path FALSE.\n");
+
+			retvm_if(_util_path_in_use(orig_fpath), MTP_ERROR_ACCESS_DENIED,
+				"in use on the device [%s]\n", orig_fpath);
 
 			g_snprintf(g_last_moved, MTP_MAX_PATHNAME_SIZE + 1,
 					"%s", orig_fpath);

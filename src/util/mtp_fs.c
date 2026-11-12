@@ -24,6 +24,9 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <string.h>
 #include <glib.h>
 #include <glib/gprintf.h>
 #include "mtp_fs.h"
@@ -353,6 +356,76 @@ DONE:
 
 	closedir(dir);
 	return (retval == 0) ? TRUE : FALSE;
+}
+
+static mtp_bool __path_matches(const mtp_char *file, const mtp_char *path, size_t len)
+{
+	return !strncmp(file, path, len) && (file[len] == '\0' || file[len] == '/' || file[len] == '\n' ||
+		!strcmp(file + len, " (deleted)\n"));
+}
+
+/* a mapped file (a shared library run from the card) is in use with no descriptor open */
+static mtp_bool __mapped_by(const mtp_char *pid, const mtp_char *path, size_t len)
+{
+	mtp_char maps[64], line[PATH_MAX + 128], *file;
+	mtp_bool busy = FALSE;
+	FILE *f;
+
+	g_snprintf(maps, sizeof(maps), "/proc/%s/maps", pid);
+	f = fopen(maps, "r");
+	if (f == NULL)
+		return FALSE;
+	while (!busy && fgets(line, sizeof(line), f) != NULL) {
+		file = strchr(line, '/');
+		if (file != NULL && __path_matches(file, path, len))
+			busy = TRUE;
+	}
+	fclose(f);
+	return busy;
+}
+
+/*
+ * TRUE when a process other than this one has the file open or mapped, or a file below the
+ * directory. The host must not delete or rename what an application on the device is using.
+ */
+mtp_bool _util_path_in_use(const mtp_char *path)
+{
+	mtp_char link[PATH_MAX + 1];
+	mtp_char fdpath[64];
+	size_t len = strlen(path);
+	struct dirent *p, *f;
+	DIR *proc, *fds;
+	pid_t self = getpid();
+	ssize_t n;
+	mtp_bool busy = FALSE;
+
+	proc = opendir("/proc");
+	if (proc == NULL)
+		return FALSE;
+	while (!busy && (p = readdir(proc)) != NULL) {
+		if (p->d_name[0] < '0' || p->d_name[0] > '9' || atoi(p->d_name) == self)
+			continue;
+		g_snprintf(fdpath, sizeof(fdpath), "/proc/%s/fd", p->d_name);
+		fds = opendir(fdpath);
+		if (fds == NULL)
+			continue;
+		while (!busy && (f = readdir(fds)) != NULL) {
+			if (f->d_name[0] == '.')
+				continue;
+			g_snprintf(fdpath, sizeof(fdpath), "/proc/%s/fd/%s", p->d_name, f->d_name);
+			n = readlink(fdpath, link, PATH_MAX);
+			if (n <= 0)
+				continue;
+			link[n] = '\0';
+			if (__path_matches(link, path, len))
+				busy = TRUE;
+		}
+		closedir(fds);
+		if (!busy)
+			busy = __mapped_by(p->d_name, path, len);
+	}
+	closedir(proc);
+	return busy;
 }
 
 mtp_bool _util_file_move(const mtp_char *origpath, const mtp_char *newpath,
