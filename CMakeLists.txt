@@ -31,7 +31,7 @@ FOREACH(flag ${pkgs_CFLAGS})
 ENDFOREACH(flag)
 
 SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} -Wall -Werror=implicit-function-declaration")
-SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} -fexceptions -fvisibility=hidden -fprofile-arcs -ftest-coverage")
+SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} -fexceptions -fvisibility=hidden")
 
 SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLAGS} -fPIE")
 SET(CMAKE_EXE_LINKER_FLAGS " -Wl,--as-needed -pie -Wl,--hash-style=both")
