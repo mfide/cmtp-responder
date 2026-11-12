@@ -19,11 +19,13 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <dirent.h>
+#include <sys/statvfs.h>
 #include "mtp_util.h"
 #include "mtp_support.h"
 #include "mtp_device.h"
 #include "mtp_transport.h"
 #include "mtp_inoti_handler.h"
+#include "mtp_event_handler.h"
 
 
 extern mtp_char g_last_deleted[MTP_MAX_PATHNAME_SIZE + 1];
@@ -79,6 +81,23 @@ void _entity_update_store_info_run_time(store_info_t *info,
 
 	info->capacity = fs_info.disk_size;
 	info->free_space = fs_info.avail_size;
+}
+
+/* the kernel may make a file system read-only after an error: the host sees it too */
+void _entity_store_refresh_access(mtp_store_t *store)
+{
+	struct statvfs st;
+	mtp_uint16 access;
+
+	ret_if(store == NULL || store->root_path == NULL);
+	ret_if(statvfs(store->root_path, &st) != 0);
+
+	access = (st.f_flag & ST_RDONLY) ? PTP_STORAGEACCESS_R : PTP_STORAGEACCESS_RWD;
+	ret_if(access == store->store_info.access);
+
+	DBG("store [0x%x] access 0x%x -> 0x%x\n", store->store_id, store->store_info.access, access);
+	store->store_info.access = access;
+	_eh_send_event_req_to_eh_thread(EVENT_STORE_INFO_CHANGED, store->store_id, 0, NULL);
 }
 
 /* LCOV_EXCL_START */
@@ -751,6 +770,7 @@ mtp_uint16 _entity_delete_obj_mtp_store(mtp_store_t *store,
 
 	retv_if(store == NULL, PTP_RESPONSE_GEN_ERROR);
 
+	_entity_store_refresh_access(store);
 	retvm_if(PTP_STORAGEACCESS_R == store->store_info.access,
 		PTP_RESPONSE_STORE_READONLY, "Read only store\n");
 

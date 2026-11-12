@@ -82,6 +82,7 @@ static mtp_uint16 g_event_supported[] = {
 	PTP_EVENTCODE_OBJECTINFOCHANGED,
 	PTP_EVENTCODE_STOREADDED,
 	PTP_EVENTCODE_STOREREMOVED,
+	PTP_EVENTCODE_STORAGEINFOCHANGED,
 };
 
 static mtp_uint16 g_device_prop_supported[] = {

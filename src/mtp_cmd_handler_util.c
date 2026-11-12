@@ -63,6 +63,7 @@ mtp_err_t _hutil_get_storage_entry(mtp_uint32 store_id, store_info_t *info)
 	/* LCOV_EXCL_START */
 	_entity_update_store_info_run_time(&(store->store_info),
 			store->root_path);
+	_entity_store_refresh_access(store);
 
 	_prop_copy_ptpstring(&(info->store_desc), &(store->store_info.store_desc));
 	_prop_copy_ptpstring(&(info->vol_label), &(store->store_info.vol_label));
@@ -915,6 +916,7 @@ mtp_err_t _hutil_construct_object_entry(mtp_uint32 store_id,
 	store = _device_get_store(store_id);
 	retvm_if(!store, MTP_ERROR_INVALID_STORE, "Store not found\n");
 
+	_entity_store_refresh_access(store);
 	retvm_if(store->store_info.access == PTP_STORAGEACCESS_R, MTP_ERROR_STORE_READ_ONLY,
 		"Read only storage\n");
 
@@ -997,6 +999,7 @@ mtp_err_t _hutil_construct_object_entry_prop_list(mtp_uint32 store_id,
 	retvm_if(!store, MTP_ERROR_INVALID_STORE, "Could not get the store\n");
 
 	/* LCOV_EXCL_START */
+	_entity_store_refresh_access(store);
 	retvm_if(store->store_info.access == PTP_STORAGEACCESS_R, MTP_ERROR_STORE_READ_ONLY,
 		"Only read access allowed on store\n");
 
