@@ -22,6 +22,7 @@
 #include <fcntl.h>
 #include <time.h>
 #include <pthread.h>
+#include <stdlib.h>
 #include "mtp_util.h"
 #include "mtp_support.h"
 #include "mtp_fs.h"
@@ -51,7 +52,10 @@ void _util_print_error()
 void _util_get_external_path(char *external_path)
 {
 /* LCOV_EXCL_START */
-	strncpy(external_path, MTP_EXTERNAL_PATH_CHAR, sizeof(MTP_EXTERNAL_PATH_CHAR));
-	external_path[sizeof(MTP_EXTERNAL_PATH_CHAR) - 1] = 0;
+	const char *path = getenv("MTP_STORE_PATH");
+
+	/* the folder the host sees: MTP_STORE_PATH from the platform, else the built-in one */
+	g_strlcpy(external_path, path && path[0] == '/' ? path :
+			MTP_EXTERNAL_PATH_CHAR, MTP_MAX_PATHNAME_SIZE + 1);
 }
 /* LCOV_EXCL_STOP */

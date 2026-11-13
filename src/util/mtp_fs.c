@@ -763,7 +763,10 @@ mtp_bool _util_ifind_next(mtp_char *dir_name, DIR *dirp, dir_entry_t *dir_info)
 mtp_bool _util_get_filesystem_info(mtp_char *storepath,
 	fs_info_t *fs_info)
 {
-	if (!g_strcmp0(storepath, MTP_EXTERNAL_PATH_CHAR)) {
+	mtp_char ext_path[MTP_MAX_PATHNAME_SIZE + 1] = { 0 };
+
+	_util_get_external_path(ext_path);
+	if (!g_strcmp0(storepath, ext_path)) {
 		struct statfs buf = { 0 };
 		mtp_uint64 avail_size = 0;
 		mtp_uint64 capacity = 0;
