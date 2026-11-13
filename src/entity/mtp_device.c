@@ -164,12 +164,9 @@ void _init_mtp_device(void)
 	g_device->default_store_id = MTP_EXTERNAL_STORE_ID;
 	g_device->default_hparent = PTP_OBJECTHANDLE_ROOT;
 
-	/* MTP_FRIENDLY_NAME, else model and serial: what tells two devices apart on the PC */
-	if (getenv("MTP_FRIENDLY_NAME") && getenv("MTP_FRIENDLY_NAME")[0])
-		g_strlcpy(g_friendly_name, getenv("MTP_FRIENDLY_NAME"), sizeof(g_friendly_name));
-	else
-		g_snprintf(g_friendly_name, sizeof(g_friendly_name), "%s %s",
-				__env_or("MTP_MODEL", MODEL), __env_or("MTP_SERIAL", SERIAL));
+	/* the name the PC shows: MTP_FRIENDLY_NAME from the platform, else the model */
+	g_strlcpy(g_friendly_name, __env_or("MTP_FRIENDLY_NAME",
+			__env_or("MTP_MODEL", MODEL)), sizeof(g_friendly_name));
 	g_device_prop_supported_cnt = 0;
 	g_device_prop_supported[g_device_prop_supported_cnt++] =
 		MTP_PROPERTYCODE_DEVICEFRIENDLYNAME;
