@@ -517,6 +517,41 @@ void _device_refresh_storage(void)
 	UTIL_UNLOCK_MUTEX(&g_cmd_inoti_mutex);
 }
 
+/* free space the device itself used or gave back: told to the host once the figure has settled */
+void _device_report_free_space(void)
+{
+	static mtp_uint64 seen[MAX_NUM_DEVICE_STORES];
+	static mtp_uint64 told[MAX_NUM_DEVICE_STORES];
+	static mtp_bool known[MAX_NUM_DEVICE_STORES];
+	fs_info_t fs_info = { 0 };
+	mtp_store_t *store;
+	mtp_int32 ii;
+
+	ret_if(g_status->mtp_op_state < MTP_STATE_READY_SERVICE);
+	/* a transfer holds the lock for its whole length: next time */
+	ret_if(pthread_mutex_trylock(&g_cmd_inoti_mutex) != 0);
+
+	for (ii = 0; ii < g_device->num_stores && ii < MAX_NUM_DEVICE_STORES; ii++) {
+		store = &(g_device->store_list[ii]);
+		if (!_util_get_filesystem_info(store->root_path, &fs_info))
+			continue;
+
+		if (!known[ii]) {
+			known[ii] = TRUE;
+			told[ii] = fs_info.avail_size;
+		} else if (fs_info.avail_size == seen[ii] &&
+				fs_info.avail_size != told[ii]) {
+			told[ii] = fs_info.avail_size;
+			store->store_info.free_space = fs_info.avail_size;
+			_eh_send_event_req_to_eh_thread(EVENT_STORE_INFO_CHANGED,
+					store->store_id, 0, NULL);
+		}
+		seen[ii] = fs_info.avail_size;
+	}
+
+	UTIL_UNLOCK_MUTEX(&g_cmd_inoti_mutex);
+}
+
 mtp_store_t *_device_get_store(mtp_uint32 store_id)
 {
 	mtp_int32 ii = 0;

@@ -406,6 +406,12 @@ static gboolean __card_changed(gpointer data)
 	return G_SOURCE_CONTINUE;
 }
 
+static gboolean __free_space_tick(gpointer data)
+{
+	_device_report_free_space();
+	return G_SOURCE_CONTINUE;
+}
+
 static inline int _main_init()
 {
 	pthread_mutexattr_t mutex_attr;
@@ -427,6 +433,7 @@ static inline int _main_init()
 	retvm_if(!g_mainloop, MTP_ERROR_GENERAL, "g_mainloop is NULL\n");
 
 	g_unix_signal_add(SIGUSR1, __card_changed, NULL);
+	g_timeout_add_seconds(2, __free_space_tick, NULL);
 
 	return MTP_ERROR_NONE;
 }

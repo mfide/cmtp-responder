@@ -143,6 +143,9 @@ mtp_err_t _hutil_add_object_entry(obj_info_t *obj_info, mtp_char *file_name,
 		return MTP_ERROR_GENERAL;
 	}
 
+	/* the device writes to the card as well: ask the file system, not the last figure */
+	_entity_update_store_info_run_time(&(store->store_info),
+			store->root_path);
 	if (store->store_info.free_space < obj_info->file_size) {
 		ERR("free space is not enough [%llu] bytes, object size[%llu]\n",
 				store->store_info.free_space, obj_info->file_size);
