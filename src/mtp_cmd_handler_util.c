@@ -894,6 +894,7 @@ mtp_err_t _hutil_write_file_data(mtp_uint32 store_id, mtp_obj_t *obj,
 
 		return MTP_ERROR_STORE_FULL;
 	}
+	_util_file_sync(fname);
 
 #ifdef MTP_SUPPORT_SET_PROTECTION
 	if ((obj_info->protcn_status == PTP_PROTECTIONSTATUS_READONLY) ||

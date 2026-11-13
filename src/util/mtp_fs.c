@@ -131,6 +131,25 @@ mtp_int32 _util_file_close(FILE* fhandle)
 	return fclose(fhandle);
 }
 
+/* a file the host sent is on the medium before the host hears it arrived */
+void _util_file_sync(const mtp_char *path)
+{
+	mtp_char dir[MTP_MAX_PATHNAME_SIZE + 1] = { 0 };
+	mtp_int32 fd;
+
+	fd = open(path, O_RDONLY);
+	if (fd >= 0) {
+		fsync(fd);
+		close(fd);
+	}
+	_util_get_parent_path(path, dir);
+	fd = open(dir, O_RDONLY | O_DIRECTORY);
+	if (fd >= 0) {
+		fsync(fd);
+		close(fd);
+	}
+}
+
 /*
  * This function seeks to a particular location in a file.
  *
