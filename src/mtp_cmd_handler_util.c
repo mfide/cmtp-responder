@@ -1340,6 +1340,10 @@ mtp_err_t _hutil_update_object_property(mtp_uint32 obj_handle,
 				MTP_ERROR_INVALID_OBJECT_PROP_FORMAT,
 				"failed to set the full path!!\n");
 
+			/* the host reads the name back: not the one from before */
+			if (obj->propval_list.nnodes > 0)
+				_prop_update_property_values_list(obj);
+
 			DBG("File moved to [%s]\n", dest_fpath);
 		} else {
 			ERR_SECURE("changed name is same with original one. [%s]\n",
