@@ -88,11 +88,12 @@ static mtp_uint16 g_event_supported[] = {
 	PTP_EVENTCODE_DEVICEPROPCHANGED,
 };
 
-/* filled at start: the name always, the battery level when the platform names its source */
-static mtp_uint16 g_device_prop_supported[2];
+/* filled at start: the name always, battery level and device type when the platform gives them */
+static mtp_uint16 g_device_prop_supported[3];
 static mtp_uint32 g_device_prop_supported_cnt;
 static mtp_char g_friendly_name[128];
 static const mtp_char *g_battery_file;
+static mtp_uint32 g_device_type;
 
 static mtp_uint16 g_capture_fmts[] = {
 };
@@ -177,6 +178,11 @@ void _init_mtp_device(void)
 			PTP_PROPERTYCODE_BATTERYLEVEL;
 	else
 		g_battery_file = NULL;
+	/* MTP_DEVICE_TYPE: the perceived device type, hosts pick the icon by it (5 = PDA) */
+	g_device_type = strtoul(__env_or("MTP_DEVICE_TYPE", "0"), NULL, 0);
+	if (g_device_type)
+		g_device_prop_supported[g_device_prop_supported_cnt++] =
+			MTP_PROPERTYCODE_PERCEIVEDDEVICETYPE;
 	DBG("device properties: %u\n", g_device_prop_supported_cnt);
 
 	_prop_build_supp_props_default();
@@ -590,6 +596,17 @@ mtp_int32 _device_get_battery_level(void)
 	return level > 100 ? 100 : level;
 }
 
+static mtp_uint32 __pack_device_type(mtp_uchar *ptr)
+{
+	mtp_uint32 type = g_device_type;
+
+#ifdef __BIG_ENDIAN__
+	_util_conv_byte_order(&type, sizeof(type));
+#endif /* __BIG_ENDIAN__ */
+	memcpy(ptr, &type, sizeof(type));
+	return sizeof(type);
+}
+
 /* the value of a device property, with its description around it when desc is set; 0: not a property of this device */
 mtp_uint32 _device_pack_device_prop(mtp_uint32 prop_code, mtp_bool desc,
 		mtp_uchar *buf, mtp_uint32 buf_sz)
@@ -611,6 +628,8 @@ mtp_uint32 _device_pack_device_prop(mtp_uint32 prop_code, mtp_bool desc,
 	if (prop_code == MTP_PROPERTYCODE_DEVICEFRIENDLYNAME) {
 		type = PTP_DATATYPE_STRING;
 		_prop_copy_char_to_ptpstring(&name, g_friendly_name, CHAR_TYPE);
+	} else if (prop_code == MTP_PROPERTYCODE_PERCEIVEDDEVICETYPE) {
+		type = PTP_DATATYPE_UINT32;
 	} else {
 		type = PTP_DATATYPE_UINT8;
 		level = _device_get_battery_level();
@@ -628,12 +647,19 @@ mtp_uint32 _device_pack_device_prop(mtp_uint32 prop_code, mtp_bool desc,
 		memcpy(ptr, &type, sizeof(type));
 		ptr += sizeof(type);
 		*ptr++ = PTP_PROPGETSET_GETONLY;
-		/* the factory default: no name, an empty battery */
-		*ptr++ = 0;
+		/* the factory default: no name, an empty battery, the type itself */
+		if (prop_code == MTP_PROPERTYCODE_PERCEIVEDDEVICETYPE)
+			ptr += __pack_device_type(ptr);
+		else
+			*ptr++ = 0;
 	}
 
 	if (prop_code == MTP_PROPERTYCODE_DEVICEFRIENDLYNAME) {
 		ptr += _prop_pack_ptpstring(&name, ptr, _prop_size_ptpstring(&name));
+		if (desc)
+			*ptr++ = 0;	/* no form */
+	} else if (prop_code == MTP_PROPERTYCODE_PERCEIVEDDEVICETYPE) {
+		ptr += __pack_device_type(ptr);
 		if (desc)
 			*ptr++ = 0;	/* no form */
 	} else {
