@@ -19,6 +19,7 @@
 #define _GNU_SOURCE
 #include <sys/ioctl.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <unistd.h>
 #include <signal.h>
 #include <glib.h>
@@ -72,6 +73,36 @@ static void __handle_control_request(mtp_int32 request, __u16 wLength);
  */
 
 /* LCOV_EXCL_START */
+static mtp_int32 __open_endpoint(const mtp_char *ep0_path, mtp_int32 num)
+{
+	mtp_char path[PATH_MAX];
+	mtp_char *slash;
+
+	g_strlcpy(path, ep0_path, sizeof(path) - 8);
+	slash = strrchr(path, '/');
+	if (slash == NULL)
+		return -1;
+	g_snprintf(slash + 1, 8, "ep%d", num);
+
+	return open(path, O_RDWR | O_CLOEXEC);
+}
+
+static mtp_bool __open_endpoints(void)
+{
+	mtp_char ep0_path[PATH_MAX] = { 0 };
+	mtp_char link[64];
+
+	g_snprintf(link, sizeof(link), "/proc/self/fd/%d", SD_LISTEN_FDS_START);
+	if (readlink(link, ep0_path, sizeof(ep0_path) - 1) < 0)
+		return FALSE;
+
+	g_usb_ep_in = __open_endpoint(ep0_path, 1);
+	g_usb_ep_out = __open_endpoint(ep0_path, 2);
+	g_usb_ep_status = __open_endpoint(ep0_path, 3);
+
+	return g_usb_ep_in >= 0 && g_usb_ep_out >= 0 && g_usb_ep_status >= 0;
+}
+
 mtp_bool _transport_init_usb_device(void)
 {
 	int n, msg_size;
@@ -87,15 +118,19 @@ mtp_bool _transport_init_usb_device(void)
 		ERR("Inheriting FunctionFS descriptors from systemd failed, errno [%s]\n",
 		    strerror_r(errno, error, sizeof(error)));
 		return FALSE;
-	} else if (n < 4) {
-		ERR("Expected 4 FunctionFS descriptors from systemd but received %d\n", n);
-		return FALSE;
 	}
 	DBG("socket-activated\n");
 	g_usb_ep0 = SD_LISTEN_FDS_START;
-	g_usb_ep_in = SD_LISTEN_FDS_START + 1;
-	g_usb_ep_out = SD_LISTEN_FDS_START + 2;
-	g_usb_ep_status = SD_LISTEN_FDS_START + 3;
+	if (n >= 4) {
+		g_usb_ep_in = SD_LISTEN_FDS_START + 1;
+		g_usb_ep_out = SD_LISTEN_FDS_START + 2;
+		g_usb_ep_status = SD_LISTEN_FDS_START + 3;
+	} else if (!__open_endpoints()) {
+		/* systemd keeps only ep0 across a daemon-reload */
+		ERR("%d FunctionFS descriptors from systemd and the endpoints do not open\n", n);
+		g_usb_ep0 = -1;
+		return FALSE;
+	}
 
 	DBG("Final : Tx pkt size:[%u], Rx pkt size:[%u]\n", g_conf.write_usb_size, g_conf.read_usb_size);
 
