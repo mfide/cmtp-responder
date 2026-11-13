@@ -606,6 +606,24 @@ void *_thread_inoti(void *arg)
 	/* LCOV_EXCL_STOP */
 }
 
+/* a folder renamed or moved over MTP keeps its watches: they answer to the new path */
+void _inoti_move_watches(const mtp_char *old_path, const mtp_char *new_path)
+{
+	size_t len = strlen(old_path);
+	mtp_char *name;
+	mtp_int32 i;
+
+	for (i = 0; i < g_cnt_watch_folder; i++) {
+		name = g_inoti_watches[i].forlder_name;
+		if (name == NULL || strncmp(name, old_path, len) != 0 ||
+				(name[len] != '/' && name[len] != '\0'))
+			continue;
+
+		g_inoti_watches[i].forlder_name = g_strconcat(new_path, name + len, NULL);
+		g_free(name);
+	}
+}
+
 void _inoti_remove_watches(mtp_char *path)
 {
 	__remove_recursive_inoti_watch(path);

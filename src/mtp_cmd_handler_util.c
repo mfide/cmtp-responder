@@ -20,6 +20,7 @@
 #include <glib/gprintf.h>
 #include "mtp_cmd_handler.h"
 #include "mtp_cmd_handler_util.h"
+#include "mtp_inoti_handler.h"
 #include "mtp_support.h"
 #include "mtp_transport.h"
 
@@ -670,6 +671,157 @@ mtp_err_t _hutil_copy_object_entries(mtp_uint32 dst_store_id,
 
 	return MTP_ERROR_NONE;
 }
+/* the folder an object is moved or copied into: NULL with MTP_ERROR_NONE is the root of the store */
+static mtp_err_t __get_target_folder(mtp_store_t *store, mtp_obj_t *obj,
+		mtp_uint32 h_parent, mtp_obj_t **par_obj, mtp_char *fpath,
+		mtp_uint32 fpath_sz)
+{
+	mtp_char name[MTP_MAX_PATHNAME_SIZE + 1] = { 0 };
+	mtp_obj_t *up;
+	mtp_uint32 h;
+
+	*par_obj = NULL;
+	if (h_parent != PTP_OBJECTHANDLE_ROOT && h_parent != PTP_OBJECTHANDLE_ALL) {
+		*par_obj = _entity_get_object_from_store(store, h_parent);
+		retvm_if(!*par_obj || !(*par_obj)->obj_info ||
+				(*par_obj)->obj_info->obj_fmt != PTP_FMT_ASSOCIATION,
+				MTP_ERROR_INVALID_PARENT, "no such folder [0x%x]\n", h_parent);
+
+		/* not into itself, nor into a folder below it */
+		for (h = h_parent; h != PTP_OBJECTHANDLE_ROOT; h = up->obj_info->h_parent) {
+			retvm_if(h == obj->obj_handle, MTP_ERROR_INVALID_PARENT,
+					"target is inside the object\n");
+			up = _entity_get_object_from_store(store, h);
+			if (up == NULL || up->obj_info == NULL)
+				break;
+		}
+	}
+
+	_util_get_file_name(obj->file_path, name);
+	retvm_if(!_util_create_path(fpath, fpath_sz, *par_obj ?
+			(*par_obj)->file_path : store->root_path, name),
+			MTP_ERROR_GENERAL, "path is too long\n");
+	retvm_if(access(fpath, F_OK) == 0, MTP_ERROR_ACCESS_DENIED,
+			"[%s] exists\n", fpath);
+
+	return MTP_ERROR_NONE;
+}
+
+mtp_err_t _hutil_move_object_entry(mtp_uint32 obj_handle, mtp_uint32 store_id,
+		mtp_uint32 h_parent)
+{
+	mtp_char orig_fpath[MTP_MAX_PATHNAME_SIZE + 1] = { 0 };
+	mtp_char dest_fpath[MTP_MAX_PATHNAME_SIZE + 1] = { 0 };
+	mtp_obj_t *par_obj = NULL;
+	mtp_store_t *store;
+	mtp_obj_t *obj;
+	mtp_int32 error = 0;
+	mtp_err_t ret;
+
+	store = _device_get_store_containing_obj(obj_handle);
+	retvm_if(!store, MTP_ERROR_INVALID_OBJECTHANDLE, "no such object\n");
+	retvm_if(store_id != store->store_id, MTP_ERROR_INVALID_STORE,
+			"not the store of the object\n");
+	obj = _entity_get_object_from_store(store, obj_handle);
+	retvm_if(!obj || !obj->obj_info, MTP_ERROR_INVALID_OBJECTHANDLE, "no such object\n");
+
+	_entity_store_refresh_access(store);
+	retvm_if(store->store_info.access == PTP_STORAGEACCESS_R,
+			MTP_ERROR_STORE_READ_ONLY, "read-only store\n");
+
+	ret = __get_target_folder(store, obj, h_parent, &par_obj, dest_fpath,
+			sizeof(dest_fpath));
+	retv_if(ret != MTP_ERROR_NONE, ret);
+
+	g_strlcpy(orig_fpath, obj->file_path, sizeof(orig_fpath));
+	retvm_if(!_entity_check_child_obj_path(obj, orig_fpath, dest_fpath),
+			MTP_ERROR_GENERAL, "a path below gets too long\n");
+	retvm_if(_util_path_in_use(orig_fpath), MTP_ERROR_ACCESS_DENIED,
+			"in use on the device [%s]\n", orig_fpath);
+
+	g_snprintf(g_last_moved, MTP_MAX_PATHNAME_SIZE + 1, "%s", orig_fpath);
+	if (rename(orig_fpath, dest_fpath) < 0) {
+		error = errno;
+		memset(g_last_moved, 0, MTP_MAX_PATHNAME_SIZE + 1);
+		ERR("rename [%s] -> [%s] Fail : %d\n", orig_fpath, dest_fpath, error);
+		return error == EACCES || error == EBUSY ? MTP_ERROR_ACCESS_DENIED :
+			MTP_ERROR_GENERAL;
+	}
+
+	obj->obj_info->h_parent = par_obj ? par_obj->obj_handle : PTP_OBJECTHANDLE_ROOT;
+	_entity_set_object_file_path(obj, dest_fpath, CHAR_TYPE);
+	_entity_set_child_object_path(obj, orig_fpath, dest_fpath);
+#ifdef MTP_SUPPORT_OBJECTADDDELETE_EVENT
+	_inoti_move_watches(orig_fpath, dest_fpath);
+#endif /* MTP_SUPPORT_OBJECTADDDELETE_EVENT */
+	if (obj->propval_list.nnodes > 0)
+		_prop_update_property_values_list(obj);
+
+	return MTP_ERROR_NONE;
+}
+
+mtp_err_t _hutil_copy_object_entry(mtp_uint32 obj_handle, mtp_uint32 store_id,
+		mtp_uint32 h_parent, mtp_uint32 *new_handle)
+{
+	mtp_char dest_fpath[MTP_MAX_PATHNAME_SIZE + 1] = { 0 };
+	mtp_obj_t *par_obj = NULL;
+	mtp_obj_t *new_obj;
+	slist_node_t *node;
+	mtp_store_t *store;
+	mtp_obj_t *obj;
+	mtp_err_t ret;
+	size_t len;
+
+	store = _device_get_store_containing_obj(obj_handle);
+	retvm_if(!store, MTP_ERROR_INVALID_OBJECTHANDLE, "no such object\n");
+	retvm_if(store_id != store->store_id, MTP_ERROR_INVALID_STORE,
+			"not the store of the object\n");
+	obj = _entity_get_object_from_store(store, obj_handle);
+	retvm_if(!obj || !obj->obj_info, MTP_ERROR_INVALID_OBJECTHANDLE, "no such object\n");
+
+	_entity_store_refresh_access(store);
+	retvm_if(store->store_info.access == PTP_STORAGEACCESS_R,
+			MTP_ERROR_STORE_READ_ONLY, "read-only store\n");
+
+	ret = __get_target_folder(store, obj, h_parent, &par_obj, dest_fpath,
+			sizeof(dest_fpath));
+	retv_if(ret != MTP_ERROR_NONE, ret);
+
+	_entity_update_store_info_run_time(&(store->store_info), store->root_path);
+	retvm_if(store->store_info.free_space <=
+			_entity_get_object_tree_size(store, obj), MTP_ERROR_STORE_FULL,
+			"no room for the copy\n");
+
+	ret = _hutil_copy_object_entries(store_id, store_id, par_obj ?
+			par_obj->obj_handle : PTP_OBJECTHANDLE_ROOT, obj_handle,
+			new_handle, FALSE);
+	if (ret != MTP_ERROR_NONE) {
+		/* a file copy that broke off leaves nothing behind */
+		if (obj->obj_info->obj_fmt != PTP_FMT_ASSOCIATION) {
+			g_snprintf(g_last_deleted, MTP_MAX_PATHNAME_SIZE + 1, "%s", dest_fpath);
+			if (remove(dest_fpath) < 0)
+				memset(g_last_deleted, 0, MTP_MAX_PATHNAME_SIZE + 1);
+		}
+		return ret;
+	}
+
+#ifdef MTP_SUPPORT_OBJECTADDDELETE_EVENT
+	/* the new folders are watched like the ones a scan finds */
+	len = strlen(dest_fpath);
+	for (node = store->obj_list.start; node; node = node->link) {
+		new_obj = (mtp_obj_t *)node->value;
+		if (new_obj && new_obj->obj_info && new_obj->file_path &&
+				new_obj->obj_info->obj_fmt == PTP_FMT_ASSOCIATION &&
+				!strncmp(new_obj->file_path, dest_fpath, len) &&
+				(new_obj->file_path[len] == '/' ||
+				 new_obj->file_path[len] == '\0'))
+			_inoti_add_watch_for_fs_events(new_obj->file_path);
+	}
+#endif /* MTP_SUPPORT_OBJECTADDDELETE_EVENT */
+
+	return MTP_ERROR_NONE;
+}
+
 /* LCOV_EXCL_STOP */
 
 mtp_err_t _hutil_read_file_data_from_offset(mtp_uint32 obj_handle, off_t offset,
@@ -1343,6 +1495,9 @@ mtp_err_t _hutil_update_object_property(mtp_uint32 obj_handle,
 				MTP_ERROR_INVALID_OBJECT_PROP_FORMAT,
 				"failed to set the full path!!\n");
 
+#ifdef MTP_SUPPORT_OBJECTADDDELETE_EVENT
+			_inoti_move_watches(orig_fpath, dest_fpath);
+#endif /* MTP_SUPPORT_OBJECTADDDELETE_EVENT */
 			/* the host reads the name back: not the one from before */
 			if (obj->propval_list.nnodes > 0)
 				_prop_update_property_values_list(obj);

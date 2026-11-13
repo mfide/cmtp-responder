@@ -71,10 +71,9 @@ static mtp_uint16 g_ops_supported[] = {
 
 /* Android Random I/O Extensions Codes which is a part of MTP protocol events
  * trigered  for file access operations */
-        PTP_OC_ANDROID_BEGINEDITOBJECT,
-        PTP_OC_ANDROID_ENDEDITOBJECT,
         PTP_OC_ANDROID_GETPARTIALOBJECT,
-        PTP_OC_ANDROID_SENDPARTIALOBJECT,
+	PTP_OPCODE_MOVEOBJECT,
+	PTP_OPCODE_COPYOBJECT,
 };
 
 static mtp_uint16 g_event_supported[] = {
