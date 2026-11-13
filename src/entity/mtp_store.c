@@ -276,6 +276,24 @@ mtp_obj_t *_entity_add_folder_to_store(mtp_store_t *store, mtp_uint32 h_parent,
 	return obj;
 }
 
+/* handle -> object, for every object in a store list: a list search per command is what made big folders slow */
+static GHashTable *g_obj_index;
+
+void _entity_index_add(mtp_obj_t *obj)
+{
+	if (g_obj_index == NULL)
+		g_obj_index = g_hash_table_new(g_direct_hash, g_direct_equal);
+	g_hash_table_insert(g_obj_index, GUINT_TO_POINTER(obj->obj_handle), obj);
+}
+
+void _entity_index_remove(mtp_obj_t *obj)
+{
+	ret_if(g_obj_index == NULL || obj == NULL);
+	if (g_hash_table_lookup(g_obj_index,
+				GUINT_TO_POINTER(obj->obj_handle)) == obj)
+		g_hash_table_remove(g_obj_index, GUINT_TO_POINTER(obj->obj_handle));
+}
+
 mtp_bool _entity_add_object_to_store(mtp_store_t *store, mtp_obj_t *obj)
 {
 	mtp_obj_t *par_obj = NULL;
@@ -286,6 +304,7 @@ mtp_bool _entity_add_object_to_store(mtp_store_t *store, mtp_obj_t *obj)
 
 	retvm_if(!_util_add_node(&(store->obj_list), obj), FALSE,
 		"Node add to list Fail\n");
+	_entity_index_add(obj);
 
 	/* references */
 	if (PTP_OBJECTHANDLE_ROOT != obj->obj_info->h_parent) {
@@ -304,6 +323,14 @@ mtp_obj_t *_entity_get_object_from_store(mtp_store_t *store, mtp_uint32 handle)
 
 	retv_if(NULL == store, NULL);
 
+	if (g_obj_index != NULL) {
+		obj = g_hash_table_lookup(g_obj_index, GUINT_TO_POINTER(handle));
+		if (obj && obj->obj_handle == handle && obj->obj_info &&
+				obj->obj_info->store_id == store->store_id)
+			return obj;
+	}
+
+	/* not in the index: the list decides, and what it holds is indexed from now on */
 	iter = (slist_iterator *)_util_init_list_iterator(&(store->obj_list));
 	retvm_if(!iter, NULL, "Iterator init Fail, Store id = [0x%x]\n", store->store_id);
 
@@ -312,6 +339,7 @@ mtp_obj_t *_entity_get_object_from_store(mtp_store_t *store, mtp_uint32 handle)
 
 		if (obj && obj->obj_handle == handle) {
 			g_free(iter);
+			_entity_index_add(obj);
 			return obj;
 		}
 	}
@@ -635,6 +663,7 @@ mtp_bool _entity_remove_object_mtp_store(mtp_store_t *store, mtp_obj_t *obj,
 							format, response, atleast_one,
 							read_only)) {
 					slist_node_t *node;
+					_entity_index_remove(child_obj);
 					node = _util_delete_node(&(store->obj_list),
 							child_obj);
 					g_free(node);
@@ -799,6 +828,7 @@ mtp_uint16 _entity_delete_obj_mtp_store(mtp_store_t *store,
 				slist_node_t *temp = NULL;
 
 				node = node->link;
+				_entity_index_remove(obj);
 				temp = _util_delete_node(&(store->obj_list), obj);
 				g_free(temp);
 				_entity_dealloc_mtp_obj(obj);
@@ -830,6 +860,7 @@ mtp_uint16 _entity_delete_obj_mtp_store(mtp_store_t *store,
 						&response, &atleas_one, read_only)) {
 				slist_node_t *temp = NULL;
 
+				_entity_index_remove(obj);
 				temp = _util_delete_node(&(store->obj_list), obj);
 				g_free(temp);
 				_entity_dealloc_mtp_obj(obj);
@@ -964,6 +995,7 @@ static mtp_obj_t *__enum_add_object(mtp_store_t *store, mtp_obj_t *pobj,
 		_entity_dealloc_mtp_obj(obj);
 		return NULL;
 	}
+	_entity_index_add(obj);
 
 	if (pobj)
 		_entity_add_reference_child_array(pobj, obj->obj_handle);

@@ -679,6 +679,9 @@ void _entity_dealloc_mtp_obj(mtp_obj_t *obj)
 
 	ret_if(NULL == obj);
 
+	/* a freed object answers to no handle */
+	_entity_index_remove(obj);
+
 	if (obj->obj_info) {
 		_entity_dealloc_obj_info(obj->obj_info);
 		obj->obj_info = NULL;

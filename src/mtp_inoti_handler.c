@@ -290,6 +290,7 @@ static void __delete_children_from_store_inoti(mtp_store_t *store,
 			__delete_children_from_store_inoti(store, child_obj);
 		}
 
+		_entity_index_remove(child_obj);
 		node = _util_delete_node(&(store->obj_list), child_obj);
 		g_free(node);
 		_entity_dealloc_mtp_obj(child_obj);
@@ -332,6 +333,7 @@ static void __process_object_deleted_event(mtp_char *fullpath,
 	if (TRUE == isdir)
 		__delete_children_from_store_inoti(store, obj);
 
+	_entity_index_remove(obj);
 	node = _util_delete_node(&(store->obj_list), obj);
 	g_free(node);
 	_entity_dealloc_mtp_obj(obj);
