@@ -409,6 +409,7 @@ static gboolean __card_changed(gpointer data)
 static gboolean __free_space_tick(gpointer data)
 {
 	_device_report_free_space();
+	_device_report_battery_level();
 	return G_SOURCE_CONTINUE;
 }
 

@@ -67,6 +67,10 @@ static mtp_bool __send_events_from_device_to_pc(mtp_dword store_id,
 				0, param1 , 0);
 		break;
 
+	case PTP_EVENTCODE_DEVICEPROPCHANGED:
+		_hdlr_init_event_container(&event, ptp_event, 0, param1, 0);
+		break;
+
 	case PTP_EVENTCODE_STOREADDED:
 	case PTP_EVENTCODE_STOREREMOVED:
 	case PTP_EVENTCODE_STORAGEINFOCHANGED:
@@ -133,6 +137,10 @@ static mtp_bool __process_event_request(mtp_event_t *evt)
 				PTP_EVENTCODE_STORAGEINFOCHANGED, 0, 0);
 		break;
 
+	case EVENT_DEVICE_PROP_CHANGED:
+		__send_events_from_device_to_pc(0,
+				PTP_EVENTCODE_DEVICEPROPCHANGED, evt->param1, 0);
+		break;
 	case EVENT_STORE_ADDED:
 		__send_events_from_device_to_pc(evt->param1,
 				PTP_EVENTCODE_STOREADDED, 0, 0);

@@ -144,6 +144,10 @@ mtp_bool _device_uninstall_storage(void);
  */
 void _device_refresh_storage(void);
 void _device_report_free_space(void);
+mtp_int32 _device_get_battery_level(void);
+mtp_uint32 _device_pack_device_prop(mtp_uint32 prop_code, mtp_bool desc,
+		mtp_uchar *buf, mtp_uint32 buf_sz);
+void _device_report_battery_level(void);
 
 /*
  * mtp_store_t *_device_get_store(mtp_uint32 store_id)

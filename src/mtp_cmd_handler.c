@@ -458,6 +458,38 @@ static void __copy_object(mtp_handler_t *hdlr)
 		_cmd_hdlr_send_response_code(hdlr, resp);
 }
 
+static void __get_device_prop(mtp_handler_t *hdlr, mtp_bool desc)
+{
+	mtp_uint32 prop_code = _hdlr_get_param_cmd_container(&(hdlr->usb_cmd), 0);
+	mtp_uchar buf[512];
+	data_blk_t blk = { 0, };
+	mtp_uint32 num_bytes;
+	mtp_uchar *ptr;
+
+	DBG("Device prop: 0x%04X\n", prop_code);
+	num_bytes = _device_pack_device_prop(prop_code, desc, buf, sizeof(buf));
+	if (num_bytes == 0) {
+		_cmd_hdlr_send_response_code(hdlr, PTP_RESPONSE_PROP_NOTSUPPORTED);
+		return;
+	}
+
+	_hdlr_init_data_container(&blk, hdlr->usb_cmd.code, hdlr->usb_cmd.tid);
+	ptr = _hdlr_alloc_buf_data_container(&blk, num_bytes, num_bytes);
+	if (ptr == NULL) {
+		_cmd_hdlr_send_response_code(hdlr, PTP_RESPONSE_GEN_ERROR);
+		return;
+	}
+	memcpy(ptr, buf, num_bytes);
+
+	_device_set_phase(DEVICE_PHASE_DATAIN);
+	if (_hdlr_send_data_container(&blk))
+		_cmd_hdlr_send_response_code(hdlr, PTP_RESPONSE_OK);
+	else
+		_device_set_phase(DEVICE_PHASE_NOTREADY);
+
+	g_free(blk.data);
+}
+
 static void __get_device_info(mtp_handler_t *hdlr)
 {
 	/* Check the parameters*/
@@ -1569,6 +1601,12 @@ static void __process_commands(mtp_handler_t *hdlr, cmd_blk_t *cmd)
 		break;
 	case PTP_OPCODE_MOVEOBJECT:
 		__move_object(hdlr);
+		break;
+	case PTP_OPCODE_GETDEVICEPROPDESC:
+		__get_device_prop(hdlr, TRUE);
+		break;
+	case PTP_OPCODE_GETDEVICEPROPVALUE:
+		__get_device_prop(hdlr, FALSE);
 		break;
 	case PTP_OPCODE_COPYOBJECT:
 		__copy_object(hdlr);

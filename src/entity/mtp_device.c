@@ -72,6 +72,8 @@ static mtp_uint16 g_ops_supported[] = {
 /* Android Random I/O Extensions Codes which is a part of MTP protocol events
  * trigered  for file access operations */
         PTP_OC_ANDROID_GETPARTIALOBJECT,
+	PTP_OPCODE_GETDEVICEPROPDESC,
+	PTP_OPCODE_GETDEVICEPROPVALUE,
 	PTP_OPCODE_MOVEOBJECT,
 	PTP_OPCODE_COPYOBJECT,
 };
@@ -83,10 +85,14 @@ static mtp_uint16 g_event_supported[] = {
 	PTP_EVENTCODE_STOREADDED,
 	PTP_EVENTCODE_STOREREMOVED,
 	PTP_EVENTCODE_STORAGEINFOCHANGED,
+	PTP_EVENTCODE_DEVICEPROPCHANGED,
 };
 
-static mtp_uint16 g_device_prop_supported[] = {
-};
+/* filled at start: the name always, the battery level when the platform names its source */
+static mtp_uint16 g_device_prop_supported[2];
+static mtp_uint32 g_device_prop_supported_cnt;
+static mtp_char g_friendly_name[128];
+static const mtp_char *g_battery_file;
 
 static mtp_uint16 g_capture_fmts[] = {
 };
@@ -158,13 +164,31 @@ void _init_mtp_device(void)
 	g_device->default_store_id = MTP_EXTERNAL_STORE_ID;
 	g_device->default_hparent = PTP_OBJECTHANDLE_ROOT;
 
+	/* MTP_FRIENDLY_NAME, else model and serial: what tells two devices apart on the PC */
+	if (getenv("MTP_FRIENDLY_NAME") && getenv("MTP_FRIENDLY_NAME")[0])
+		g_strlcpy(g_friendly_name, getenv("MTP_FRIENDLY_NAME"), sizeof(g_friendly_name));
+	else
+		g_snprintf(g_friendly_name, sizeof(g_friendly_name), "%s %s",
+				__env_or("MTP_MODEL", MODEL), __env_or("MTP_SERIAL", SERIAL));
+	g_device_prop_supported_cnt = 0;
+	g_device_prop_supported[g_device_prop_supported_cnt++] =
+		MTP_PROPERTYCODE_DEVICEFRIENDLYNAME;
+	/* MTP_BATTERY_FILE: a file with the charge in percent, as power_supply capacity */
+	g_battery_file = getenv("MTP_BATTERY_FILE");
+	if (g_battery_file && _device_get_battery_level() >= 0)
+		g_device_prop_supported[g_device_prop_supported_cnt++] =
+			PTP_PROPERTYCODE_BATTERYLEVEL;
+	else
+		g_battery_file = NULL;
+	DBG("device properties: %u\n", g_device_prop_supported_cnt);
+
 	_prop_build_supp_props_default();
 	info->ops_supported = g_ops_supported;
 	info->ops_supported_cnt = (sizeof(g_ops_supported) / sizeof(mtp_uint16));
 	info->events_supported = g_event_supported;
 	info->events_supported_cnt = (sizeof(g_event_supported) / sizeof(mtp_uint16));
 	info->device_prop_supported = g_device_prop_supported;
-	info->device_prop_supported_cnt = (sizeof(g_device_prop_supported) / sizeof(mtp_uint16));
+	info->device_prop_supported_cnt = g_device_prop_supported_cnt;
 	info->capture_fmts = g_capture_fmts;
 	info->capture_fmts_cnt = (sizeof(g_capture_fmts) / sizeof(mtp_uint16));
 	info->object_fmts = g_object_fmts;
@@ -214,7 +238,7 @@ mtp_uint32 _get_device_info_size(void)
 	size += sizeof(g_event_supported);
 
 	size += sizeof(mtp_uint32); /* will be populated by the array size of device properties*/
-	size += sizeof(g_device_prop_supported);
+	size += g_device_prop_supported_cnt * sizeof(mtp_uint16);
 
 	size += sizeof(mtp_uint32); /* will be populated by the array size of capture formats*/
 	size += sizeof(g_capture_fmts);
@@ -549,6 +573,100 @@ void _device_report_free_space(void)
 	}
 
 	UTIL_UNLOCK_MUTEX(&g_cmd_inoti_mutex);
+}
+
+mtp_int32 _device_get_battery_level(void)
+{
+	mtp_char buf[16] = { 0 };
+	mtp_int32 level;
+	FILE *fp;
+
+	retv_if(g_battery_file == NULL, -1);
+	fp = fopen(g_battery_file, "r");
+	retv_if(fp == NULL, -1);
+	if (fgets(buf, sizeof(buf), fp) == NULL)
+		buf[0] = 0;
+	fclose(fp);
+
+	retv_if(buf[0] < '0' || buf[0] > '9', -1);
+	level = atoi(buf);
+	return level > 100 ? 100 : level;
+}
+
+/* the value of a device property, with its description around it when desc is set; 0: not a property of this device */
+mtp_uint32 _device_pack_device_prop(mtp_uint32 prop_code, mtp_bool desc,
+		mtp_uchar *buf, mtp_uint32 buf_sz)
+{
+	ptp_string_t name = { 0 };
+	mtp_uchar *ptr = buf;
+	mtp_uint16 code = prop_code;
+	mtp_uint16 type;
+	mtp_int32 level;
+	mtp_uint32 i;
+
+	for (i = 0; i < g_device_prop_supported_cnt; i++) {
+		if (g_device_prop_supported[i] == prop_code)
+			break;
+	}
+	retv_if(i == g_device_prop_supported_cnt, 0);
+	retv_if(buf_sz < 16 + 2 * sizeof(g_friendly_name), 0);
+
+	if (prop_code == MTP_PROPERTYCODE_DEVICEFRIENDLYNAME) {
+		type = PTP_DATATYPE_STRING;
+		_prop_copy_char_to_ptpstring(&name, g_friendly_name, CHAR_TYPE);
+	} else {
+		type = PTP_DATATYPE_UINT8;
+		level = _device_get_battery_level();
+		if (level < 0)
+			level = 0;
+	}
+
+	if (desc) {
+#ifdef __BIG_ENDIAN__
+		_util_conv_byte_order(&code, sizeof(code));
+		_util_conv_byte_order(&type, sizeof(type));
+#endif /* __BIG_ENDIAN__ */
+		memcpy(ptr, &code, sizeof(code));
+		ptr += sizeof(code);
+		memcpy(ptr, &type, sizeof(type));
+		ptr += sizeof(type);
+		*ptr++ = PTP_PROPGETSET_GETONLY;
+		/* the factory default: no name, an empty battery */
+		*ptr++ = 0;
+	}
+
+	if (prop_code == MTP_PROPERTYCODE_DEVICEFRIENDLYNAME) {
+		ptr += _prop_pack_ptpstring(&name, ptr, _prop_size_ptpstring(&name));
+		if (desc)
+			*ptr++ = 0;	/* no form */
+	} else {
+		*ptr++ = (mtp_uchar)level;
+		if (desc) {
+			*ptr++ = 1;	/* a range: */
+			*ptr++ = 0;	/* from */
+			*ptr++ = 100;	/* to */
+			*ptr++ = 1;	/* in steps of */
+		}
+	}
+
+	return (mtp_uint32)(ptr - buf);
+}
+
+/* the battery level went up or down: the host asks for it again */
+void _device_report_battery_level(void)
+{
+	static mtp_int32 told = -1;
+	mtp_int32 level;
+
+	ret_if(g_battery_file == NULL);
+	ret_if(g_status->mtp_op_state < MTP_STATE_READY_SERVICE);
+
+	level = _device_get_battery_level();
+	ret_if(level < 0 || level == told);
+	if (told >= 0)
+		_eh_send_event_req_to_eh_thread(EVENT_DEVICE_PROP_CHANGED,
+				PTP_PROPERTYCODE_BATTERYLEVEL, 0, NULL);
+	told = level;
 }
 
 mtp_store_t *_device_get_store(mtp_uint32 store_id)
