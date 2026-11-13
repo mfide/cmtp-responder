@@ -67,6 +67,7 @@ static mtp_uint16 g_ops_supported[] = {
         MTP_OPCODE_GETOBJECTPROPDESC,
         MTP_OPCODE_GETOBJECTPROPVALUE,     // windows 11 needs this to be able to handle >4GB files
         MTP_OPCODE_SETOBJECTPROPVALUE,
+	MTP_OPCODE_GETOBJECTPROPLIST,
 
 /* Android Random I/O Extensions Codes which is a part of MTP protocol events
  * trigered  for file access operations */

@@ -248,6 +248,166 @@ static void __get_object_prop_value(mtp_handler_t *hdlr)
     g_free(blk.data);
 }
 
+static void __pack_object_props(GByteArray *out, mtp_obj_t *obj,
+		mtp_uint32 prop_code, mtp_uint32 group_code, mtp_uint32 *count)
+{
+	slist_node_t *node;
+	obj_prop_val_t *val;
+	mtp_uint32 h = obj->obj_handle;
+	mtp_uint32 size;
+	mtp_uint16 code;
+	mtp_uint16 type;
+	mtp_uint32 at;
+	mtp_uint32 i;
+
+	if (obj->propval_list.nnodes == 0)
+		_prop_update_property_values_list(obj);
+
+	for (i = 0, node = obj->propval_list.start;
+			i < obj->propval_list.nnodes && node; i++, node = node->link) {
+		val = (obj_prop_val_t *)node->value;
+		if (val == NULL || val->prop == NULL)
+			continue;
+
+		code = val->prop->propinfo.prop_code;
+		type = val->prop->propinfo.data_type;
+		if (prop_code == PTP_PROPERTY_UNDEFINED) {
+			if (!(val->prop->group_code & group_code))
+				continue;
+		} else if (prop_code == PTP_PROPERTY_ALL) {
+			if (val->prop->group_code & GROUP_CODE_SLOW)
+				continue;
+		} else if (prop_code != code) {
+			continue;
+		}
+#ifdef __BIG_ENDIAN__
+		_util_conv_byte_order(&h, sizeof(h));
+		_util_conv_byte_order(&code, sizeof(code));
+		_util_conv_byte_order(&type, sizeof(type));
+#endif /* __BIG_ENDIAN__ */
+		g_byte_array_append(out, (guint8 *)&h, sizeof(h));
+		g_byte_array_append(out, (guint8 *)&code, sizeof(code));
+		g_byte_array_append(out, (guint8 *)&type, sizeof(type));
+
+		size = _prop_size_obj_propval(val);
+		if (size == 0) {
+			/* a string or an array without a value is its empty form */
+			size = val->prop->propinfo.data_type == PTP_DATATYPE_STRING ?
+				1 : sizeof(mtp_uint32);
+			at = out->len;
+			g_byte_array_set_size(out, at + size);
+			memset(out->data + at, 0, size);
+		} else {
+			at = out->len;
+			g_byte_array_set_size(out, at + size);
+			_prop_pack_obj_propval(val, out->data + at, size);
+		}
+		(*count)++;
+	}
+}
+
+static void __get_object_prop_list(mtp_handler_t *hdlr)
+{
+	ptp_array_t handles = { 0 };
+	data_blk_t blk = { 0, };
+	GByteArray *out;
+	mtp_store_t *store;
+	mtp_obj_t *obj;
+	mtp_uint32 *h;
+	mtp_uint32 count = 0;
+	mtp_uint32 obj_handle;
+	mtp_uint32 format;
+	mtp_uint32 prop_code;
+	mtp_uint32 group_code;
+	mtp_uint32 depth;
+	mtp_uchar *ptr;
+	mtp_uint32 i;
+
+	obj_handle = _hdlr_get_param_cmd_container(&(hdlr->usb_cmd), 0);
+	format = _hdlr_get_param_cmd_container(&(hdlr->usb_cmd), 1);
+	prop_code = _hdlr_get_param_cmd_container(&(hdlr->usb_cmd), 2);
+	group_code = _hdlr_get_param_cmd_container(&(hdlr->usb_cmd), 3);
+	depth = _hdlr_get_param_cmd_container(&(hdlr->usb_cmd), 4);
+
+	DBG("Handle: 0x%08X format: 0x%X prop: 0x%X group: 0x%X depth: 0x%X\n",
+			obj_handle, format, prop_code, group_code, depth);
+
+	if (prop_code == PTP_PROPERTY_UNDEFINED && group_code == 0) {
+		_cmd_hdlr_send_response_code(hdlr, PTP_RESPONSE_INVALIDPARAM);
+		return;
+	}
+	if (depth > 1 && depth != 0xFFFFFFFF) {
+		_cmd_hdlr_send_response_code(hdlr,
+				MTP_RESPONSE_SPECIFICATION_BY_DEPTH_UNSUPPORTED);
+		return;
+	}
+	if (format == PTP_FORMATCODE_ALL)
+		format = PTP_FORMATCODE_NOTUSED;
+
+	_prop_init_ptparray(&handles, UINT32_TYPE);
+
+	if (obj_handle == PTP_OBJECTHANDLE_ALL ||
+			obj_handle == PTP_OBJECTHANDLE_ROOT) {
+		/* the root: its children for a depth of 1, else every object */
+		_hutil_get_object_handles(PTP_STORAGEID_ALL, format, depth == 1 ?
+				PTP_OBJECTHANDLE_ALL : PTP_OBJECTHANDLE_ROOT, &handles);
+	} else {
+		store = _device_get_store_containing_obj(obj_handle);
+		if (store == NULL) {
+			_prop_deinit_ptparray(&handles);
+			_cmd_hdlr_send_response_code(hdlr,
+					PTP_RESPONSE_INVALID_OBJ_HANDLE);
+			return;
+		}
+		if (depth == 0)
+			_prop_append_ele_ptparray(&handles, obj_handle);
+		else if (depth == 1)
+			_hutil_get_object_handles(store->store_id, format,
+					obj_handle, &handles);
+		else {
+			_prop_deinit_ptparray(&handles);
+			_cmd_hdlr_send_response_code(hdlr,
+					MTP_RESPONSE_SPECIFICATION_BY_DEPTH_UNSUPPORTED);
+			return;
+		}
+	}
+
+	out = g_byte_array_new();
+	g_byte_array_append(out, (guint8 *)&count, sizeof(count));
+	h = (mtp_uint32 *)handles.array_entry;
+	for (i = 0; i < handles.num_ele; i++) {
+		obj = _device_get_object_with_handle(h[i]);
+		if (obj == NULL || obj->obj_info == NULL)
+			continue;
+		__pack_object_props(out, obj, prop_code, group_code, &count);
+	}
+	_prop_deinit_ptparray(&handles);
+
+	i = count;
+#ifdef __BIG_ENDIAN__
+	_util_conv_byte_order(&i, sizeof(i));
+#endif /* __BIG_ENDIAN__ */
+	memcpy(out->data, &i, sizeof(i));
+
+	_hdlr_init_data_container(&blk, hdlr->usb_cmd.code, hdlr->usb_cmd.tid);
+	ptr = _hdlr_alloc_buf_data_container(&blk, out->len, out->len);
+	if (ptr == NULL) {
+		g_byte_array_free(out, TRUE);
+		_cmd_hdlr_send_response_code(hdlr, PTP_RESPONSE_GEN_ERROR);
+		return;
+	}
+	memcpy(ptr, out->data, out->len);
+	g_byte_array_free(out, TRUE);
+
+	_device_set_phase(DEVICE_PHASE_DATAIN);
+	if (_hdlr_send_data_container(&blk))
+		_cmd_hdlr_send_response_code(hdlr, PTP_RESPONSE_OK);
+	else
+		_device_set_phase(DEVICE_PHASE_NOTREADY);
+
+	g_free(blk.data);
+}
+
 static void __get_device_info(mtp_handler_t *hdlr)
 {
 	/* Check the parameters*/
@@ -1275,6 +1435,9 @@ static void __print_command(mtp_uint16 code)
 	case MTP_OPCODE_GETOBJECTPROPVALUE:
 		DBG("COMMAND ======== GET OBJECT PROP VALUE ==========\n");
 		break;
+	case MTP_OPCODE_GETOBJECTPROPLIST:
+		DBG("COMMAND ======== GET OBJECT PROP LIST ==========\n");
+		break;
 	default:
 		DBG("======== UNKNOWN COMMAND ==========\n");
 		break;
@@ -1360,6 +1523,9 @@ static void __process_commands(mtp_handler_t *hdlr, cmd_blk_t *cmd)
 		break;
 	case MTP_OPCODE_GETOBJECTPROPVALUE:
 		__get_object_prop_value(hdlr);
+		break;
+	case MTP_OPCODE_GETOBJECTPROPLIST:
+		__get_object_prop_list(hdlr);
 		break;
 
 #ifdef MTP_SUPPORT_SET_PROTECTION
