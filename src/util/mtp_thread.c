@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <signal.h>
 #include <mtp_thread.h>
 
 /*
@@ -24,6 +25,7 @@ mtp_bool _util_thread_create(pthread_t *tid, const mtp_char *tname,
 {
 	int error = 0;
 	pthread_attr_t attr;
+	sigset_t all, old;
 
 	retv_if(tname == NULL, FALSE);
 	retv_if(thread_func == NULL, FALSE);
@@ -43,7 +45,11 @@ mtp_bool _util_thread_create(pthread_t *tid, const mtp_char *tname,
 		}
 	}
 
+	/* signals are for the main loop: a handler run in a worker ends its USB read or write with EINTR */
+	sigfillset(&all);
+	pthread_sigmask(SIG_BLOCK, &all, &old);
 	error = pthread_create(tid, &attr, thread_func, arg);
+	pthread_sigmask(SIG_SETMASK, &old, NULL);
 	if (error != 0) {
 		/* LCOV_EXCL_START */
 		ERR("Thread creation Fail [%d], errno [%d]\n", error, errno);

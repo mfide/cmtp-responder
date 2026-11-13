@@ -31,6 +31,8 @@
  * GLOBAL AND EXTERN VARIABLES
  */
 extern mtp_mgr_t g_mtp_mgr;
+
+#define MTP_TEARDOWN_DEADLINE_S 5
 pthread_t g_eh_thrd;	/* event handler thread */
 mtp_int32 g_pipefd[2];
 
@@ -223,8 +225,18 @@ void _eh_send_event_req_to_eh_thread(event_code_t action, mtp_ulong param1,
 	}
 }
 
+/* stopping waits for threads that may wait for the host: past the deadline systemd starts a fresh responder */
+static void *__teardown_deadline(void *arg)
+{
+	sleep(MTP_TEARDOWN_DEADLINE_S);
+	ERR("teardown did not finish in %d s\n", MTP_TEARDOWN_DEADLINE_S);
+	_exit(1);
+	return NULL;
+}
+
 mtp_bool _eh_handle_usb_events(mtp_uint32 type)
 {
+	pthread_t deadline;
 	mtp_state_t state;
 	mtp_int32 res = 0;
 	/* Prevent repeated USB insert/remove mal-function */
@@ -269,6 +281,8 @@ mtp_bool _eh_handle_usb_events(mtp_uint32 type)
 
 		is_usb_removed = 1;
 		DBG("USB is disconnected\n");
+		_util_thread_create(&deadline, "teardown deadline",
+				PTHREAD_CREATE_DETACHED, __teardown_deadline, NULL);
 
 		g_status->is_usb_discon = TRUE;
 		g_status->cancel_intialization = TRUE;

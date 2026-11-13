@@ -41,6 +41,7 @@
  */
 extern mtp_config_t g_conf;
 extern phone_state_t *g_ph_status;
+extern mtp_int32 g_exit_code;
 
 /*
  * STATIC VARIABLES AND FUNCTIONS
@@ -156,61 +157,97 @@ mtp_int32 _transport_mq_init(msgq_id_t *rx_mqid, msgq_id_t *tx_mqid)
 	return TRUE;
 }
 
+/* a write the host has not taken yet is repeated after a signal */
+static mtp_int32 __usb_write(mtp_int32 fd, const void *buf, mtp_uint32 len)
+{
+	mtp_int32 status;
+
+	do {
+		status = write(fd, buf, len);
+	} while (status < 0 && (errno == EINTR || errno == EAGAIN));
+
+	return status;
+}
+
+void _transport_io_failed(const mtp_char *who)
+{
+	ERR("%s thread gave up, the responder stops for a restart\n", who);
+	/* after a disconnect the threads end as a matter of course */
+	if (g_ph_status->usb_state == MTP_PHONE_USB_CONNECTED)
+		g_exit_code = 1;
+	_eh_send_event_req_to_eh_thread(EVENT_USB_REMOVED, 0, 0, NULL);
+}
+
 void *_transport_thread_usb_write(void *arg)
 {
 	mtp_int32 status = 0;
 	mtp_uint32 len = 0;
+	mtp_uint32 failed = 0;
 	unsigned char *mtp_buf = NULL;
 	msg_type_t mtype = MTP_UNDEFINED_PACKET;
 	msgq_id_t *mqid = (msgq_id_t *)arg;
 
 	pthread_cleanup_push(__clean_up_msg_queue, mqid);
-
-	do {
-		/* original LinuxThreads cancelation didn't work right
-		 * so test for it explicitly.
-		 */
+	while (failed < MTP_USB_ERROR_MAX_RETRY) {
 		pthread_testcancel();
 
-		_util_rcv_msg_from_mq(*mqid, &mtp_buf, &len, &mtype);
+		mtp_buf = NULL;
+		mtype = MTP_UNDEFINED_PACKET;
+		if (!_util_rcv_msg_from_mq(*mqid, &mtp_buf, &len, &mtype)) {
+			failed++;
+			usleep(10000);
+			continue;
+		}
 
 		if (mtype == MTP_BULK_PACKET || mtype == MTP_DATA_PACKET) {
-			status = write(g_usb_ep_in, mtp_buf, len);
-			if (status < 0) {
-				ERR("USB write fail : %d\n", errno);
-				if (errno == ENOMEM || errno == ECANCELED) {
-					status = 0;
-					__clean_up_msg_queue(mqid);
-				}
-			}
-			g_free(mtp_buf);
-			mtp_buf = NULL;
-		} else if (MTP_EVENT_PACKET == mtype) {
-			/* Handling the MTP Asynchronous Events */
-			DBG("Send Interrupt data to kernel via g_usb_ep_status\n");
-			status = write(g_usb_ep_status, mtp_buf, len);
-			g_free(mtp_buf);
-			mtp_buf = NULL;
+			status = __usb_write(g_usb_ep_in, mtp_buf, len);
 		} else if (MTP_ZLP_PACKET == mtype) {
 			char dummy_buf;
-			DBG("Send ZLP data to kerne via g_usb_ep_in\n");
-			status = write(g_usb_ep_in, &dummy_buf, 0);
+
+			status = __usb_write(g_usb_ep_in, &dummy_buf, 0);
 		} else {
 			DBG("mtype = %d is not valid\n", mtype);
-			status = -1;
+			status = 0;
 		}
+		g_free(mtp_buf);
 
 		if (status < 0) {
-			ERR("write data to the device node Fail:\
-					status = %d\n", status);
-			break;
+			/* the transfer is lost, the thread is not: drop what belongs to it */
+			ERR("USB write fail : %d\n", errno);
+			failed++;
+			__clean_up_msg_queue(mqid);
+			usleep(10000);
+		} else {
+			failed = 0;
 		}
-	} while (status >= 0);
+	}
 
-	DBG("exited Source thread with status %d\n", status);
 	pthread_cleanup_pop(1);
-	g_free(mtp_buf);
+	_transport_io_failed("usb write");
+	return NULL;
+}
 
+/* events have their own way to the host: a host that does not ask for them holds up nothing else */
+void *_transport_thread_usb_event(void *arg)
+{
+	mtp_int32 fd = *(mtp_int32 *)arg;
+	usb_event_rec_t rec;
+	mtp_int32 status;
+
+	for (;;) {
+		pthread_testcancel();
+		status = read(fd, &rec, sizeof(rec));
+		if (status < 0 && errno == EINTR)
+			continue;
+		if (status != sizeof(rec))
+			break;
+		if (__usb_write(g_usb_ep_status, rec.data, rec.len) < 0) {
+			ERR("USB event write fail : %d\n", errno);
+			usleep(10000);
+		}
+	}
+
+	ERR("event pipe read fail : %d\n", errno);
 	return NULL;
 }
 
@@ -326,7 +363,7 @@ void *_transport_thread_usb_read(void *arg)
 
 	DBG("status[%d] errno[%d]\n", status, errno);
 	pthread_cleanup_pop(1);
-
+	_transport_io_failed("usb read");
 	return NULL;
 }
 
@@ -379,7 +416,7 @@ void *_transport_thread_usb_control(void *arg)
 
 	DBG("status[%d] errno[%d]\n", status, errno);
 	pthread_cleanup_pop(1);
-
+	_transport_io_failed("usb control");
 	return NULL;
 }
 

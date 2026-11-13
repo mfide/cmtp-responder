@@ -44,6 +44,7 @@ extern phone_state_t *g_ph_status;
 
 mtp_mgr_t g_mtp_mgr;
 mtp_config_t g_conf;
+mtp_int32 g_exit_code;
 
 /*
  * STATIC VARIABLES
@@ -450,5 +451,5 @@ int main(int argc, char *argv[])
 
 	DBG("######### MTP TERMINATED #########\n");
 
-	return MTP_ERROR_NONE;
+	return g_exit_code;
 }

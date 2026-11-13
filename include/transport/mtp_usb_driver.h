@@ -38,6 +38,16 @@ typedef struct mtp_max_pkt_size {
 
 mtp_bool _transport_init_usb_device(void);
 void _transport_deinit_usb_device(void);
+#define MTP_USB_EVENT_MAX 60
+
+/* one event on its way to the interrupt endpoint */
+typedef struct {
+	mtp_uint32 len;
+	mtp_uchar data[MTP_USB_EVENT_MAX];
+} usb_event_rec_t;
+
+void _transport_io_failed(const mtp_char *who);
+void *_transport_thread_usb_event(void *arg);
 void *_transport_thread_usb_write(void *arg);
 void *_transport_thread_usb_read(void *arg);
 void *_transport_thread_usb_control(void *arg);

@@ -15,7 +15,9 @@
  * limitations under the License.
  */
 
+#define _GNU_SOURCE
 #include <unistd.h>
+#include <fcntl.h>
 #include <glib.h>
 #include "mtp_config.h"
 #include "mtp_transport.h"
@@ -42,6 +44,8 @@ static pthread_t g_tx_thrd = 0;
 static pthread_t g_rx_thrd = 0;
 static pthread_t g_ctrl_thrd = 0;
 static pthread_t g_data_rcv = 0;
+static pthread_t g_evt_thrd = 0;
+static mtp_int32 g_evt_pipe[2] = { -1, -1 };
 static msgq_id_t mtp_to_usb_mqid;
 static msgq_id_t g_usb_to_mtp_mqid;
 static status_info_t _g_status;
@@ -141,24 +145,20 @@ mtp_err_t _transport_rcv_temp_file_info(mtp_byte *buf, char *filepath,
 mtp_err_t _transport_send_event(mtp_byte *buf, mtp_uint32 size,
 		mtp_uint32 *count)
 {
-	mtp_bool resp = FALSE;
-	msgq_ptr_t pkt = { 0 };
+	usb_event_rec_t rec = { 0 };
 
 	retv_if(buf == NULL, MTP_ERROR_INVALID_PARAM);
-	retvm_if(size > g_conf.write_usb_size, MTP_ERROR_INVALID_PARAM,
-			"size = %d, tx pkt size = (%d)\n", size, g_conf.write_usb_size);
+	retvm_if(size > MTP_USB_EVENT_MAX, MTP_ERROR_INVALID_PARAM,
+			"event of %u bytes\n", size);
+	retv_if(g_evt_pipe[1] < 0, MTP_ERROR_GENERAL);
 
-	pkt.mtype = MTP_EVENT_PACKET;
-	pkt.signal = 0x0000;
-	pkt.length = size;
-
-	pkt.buffer = (mtp_uchar *)g_malloc(size);
-	retvm_if(!pkt.buffer, MTP_ERROR_GENERAL, "g_malloc() Fail\n");
-
-	memcpy(pkt.buffer, buf, size);
-	resp = _util_msgq_send(mtp_to_usb_mqid, (void *)&pkt,
-			sizeof(msgq_ptr_t) - sizeof(long), 0);
-	retvm_if(!resp, MTP_ERROR_GENERAL, "_util_msgq_send() Fail\n");
+	rec.len = size;
+	memcpy(rec.data, buf, size);
+	/* never waits: with the pipe full of events the host did not fetch, this one is dropped */
+	if (write(g_evt_pipe[1], &rec, sizeof(rec)) != sizeof(rec)) {
+		ERR("event dropped : %d\n", errno);
+		return MTP_ERROR_GENERAL;
+	}
 
 	*count = size;
 	return MTP_ERROR_NONE;
@@ -297,6 +297,20 @@ static mtp_err_t __transport_init_io()
 		goto cleanup;
 	}
 
+	if (pipe2(g_evt_pipe, O_CLOEXEC) < 0) {
+		ERR("pipe2() Fail\n");
+		goto cleanup;
+	}
+	fcntl(g_evt_pipe[1], F_SETFL, O_NONBLOCK);
+	fcntl(g_evt_pipe[1], F_SETPIPE_SZ, 1024 * 1024);
+	res = _util_thread_create(&g_evt_thrd, "usb event thread",
+			PTHREAD_CREATE_JOINABLE, _transport_thread_usb_event,
+			(void *)&g_evt_pipe[0]);
+	if (FALSE == res) {
+		ERR("_util_thread_create(event) Fail\n");
+		goto cleanup;
+	}
+
 	res = _util_thread_create(&g_ctrl_thrd, "usb control thread",
 				  PTHREAD_CREATE_JOINABLE,
 				  usb_control_thread,
@@ -313,6 +327,11 @@ static mtp_err_t __transport_init_io()
 cleanup:
 	_util_print_error();
 
+	if (g_evt_thrd) {
+		res = _util_thread_cancel(g_evt_thrd);
+		DBG("pthread_cancel [%d]\n", res);
+		g_evt_thrd = 0;
+	}
 	if (g_ctrl_thrd) {
 		res = _util_thread_cancel(g_ctrl_thrd);
 		DBG("pthread_cancel [%d]\n", res);
@@ -365,6 +384,17 @@ static void __transport_deinit_io()
 		ERR("_util_thread_join(tx) Fail\n");
 
 	g_tx_thrd = 0;
+
+	if (FALSE == _util_thread_cancel(g_evt_thrd))
+		ERR("_util_thread_cancel(event) Fail\n");
+
+	if (_util_thread_join(g_evt_thrd, 0) == FALSE)
+		ERR("_util_thread_join(event) Fail\n");
+
+	g_evt_thrd = 0;
+	close(g_evt_pipe[0]);
+	close(g_evt_pipe[1]);
+	g_evt_pipe[0] = g_evt_pipe[1] = -1;
 
 	g_usb_threads_created = FALSE;
 }
